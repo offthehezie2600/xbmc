@@ -4057,8 +4057,7 @@ int CVideoPlayer::OnDiscNavResult(void* pData, int iMessage)
           if (time < 10000ms && time > 0ms)
             m_dvd.iDVDStillTime += time;
         }
-        // This has to be disabled for Blurays with background video.
-        // m_dvd.state = DVDSTATE_STILL;
+        m_dvd.state = DVDSTATE_STILL;
         CLog::Log(LOGDEBUG, "BD_EVENT_STILL_TIME - waiting {} msec, with delay of {} msec",
                   m_dvd.iDVDStillTime.count(), time.count());
       }

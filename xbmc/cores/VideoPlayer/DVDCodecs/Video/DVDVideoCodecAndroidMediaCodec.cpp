@@ -666,9 +666,8 @@ bool CDVDVideoCodecAndroidMediaCodec::Open(CDVDStreamInfo &hints, CDVDCodecOptio
       continue;
 
     m_codecname = codec_info.getName();
-    // This has to be disabled for Blurays with background video.
-    // if (!CServiceBroker::GetDecoderFilterManager()->isValid(m_codecname, m_hints))
-    //  continue;
+    if (!CServiceBroker::GetDecoderFilterManager()->isValid(m_codecname, m_hints))
+      continue;
 
     CLog::Log(LOGINFO, "CDVDVideoCodecAndroidMediaCodec::Open Testing codec:{}", m_codecname);
 
