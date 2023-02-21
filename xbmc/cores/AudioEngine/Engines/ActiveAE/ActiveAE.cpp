@@ -29,9 +29,12 @@ using namespace ActiveAE;
 
 using namespace std::chrono_literals;
 
-#define MAX_CACHE_LEVEL 0.4   // total cache time of stream in seconds
-#define MAX_WATER_LEVEL 0.2   // buffered time after stream stages in seconds
-#define MAX_BUFFER_TIME 0.1   // max time of a buffer in seconds
+namespace
+{
+constexpr float MAX_CACHE_LEVEL = 0.4f; // total cache time of stream in seconds;
+constexpr float MAX_WATER_LEVEL = 0.2f; // buffered time after stream stages in seconds;
+constexpr double MAX_BUFFER_TIME = 0.1; // max time of a buffer in seconds;
+} // unnamed namespace
 
 void CEngineStats::Reset(unsigned int sampleRate, bool pcm)
 {
@@ -73,8 +76,8 @@ void CEngineStats::GetDelay(AEDelayStatus& status)
   if (m_pcmOutput)
     status.delay += (double)m_bufferedSamples / m_sinkSampleRate;
   else
-    status.delay += static_cast<double>(m_bufferedSamples) *
-                    m_sinkFormat.m_streamInfo.GetDuration(m_sinkNeedIecPack) / 1000;
+    status.delay +=
+        static_cast<double>(m_bufferedSamples) * m_sinkFormat.m_streamInfo.GetDuration() / 1000;
 }
 
 void CEngineStats::AddStream(unsigned int streamid)
@@ -127,8 +130,7 @@ void CEngineStats::UpdateStream(CActiveAEStream *stream)
         if (m_pcmOutput)
           delay += (float)(*itBuf)->pkt->nb_samples / (*itBuf)->pkt->config.sample_rate;
         else
-          delay +=
-              static_cast<float>(m_sinkFormat.m_streamInfo.GetDuration(m_sinkNeedIecPack) / 1000.0);
+          delay += static_cast<float>(m_sinkFormat.m_streamInfo.GetDuration() / 1000.0);
       }
       str.m_bufferedTime = static_cast<double>(delay);
       stream->m_bufferedTime = 0;
@@ -146,8 +148,15 @@ void CEngineStats::GetDelay(AEDelayStatus& status, CActiveAEStream *stream)
   if (m_pcmOutput)
     status.delay += (double)m_bufferedSamples / m_sinkSampleRate;
   else
-    status.delay += static_cast<double>(m_bufferedSamples) *
-                    m_sinkFormat.m_streamInfo.GetDuration(m_sinkNeedIecPack) / 1000;
+    status.delay +=
+        static_cast<double>(m_bufferedSamples) * m_sinkFormat.m_streamInfo.GetDuration() / 1000;
+
+  if (!m_pcmOutput && m_sinkNeedIecPack &&
+      m_sinkFormat.m_streamInfo.m_type == CAEStreamInfo::STREAM_TYPE_TRUEHD)
+  {
+    // take into account MAT packer latency (half duration of MAT frame)
+    status.delay += m_sinkFormat.m_streamInfo.GetDuration() / 1000 / 2;
+  }
 
   for (auto &str : m_streamStats)
   {
@@ -170,10 +179,17 @@ void CEngineStats::GetSyncInfo(CAESyncInfo& info, CActiveAEStream *stream)
   if (m_pcmOutput)
     status.delay += (double)m_bufferedSamples / m_sinkSampleRate;
   else
-    status.delay += static_cast<double>(m_bufferedSamples) *
-                    m_sinkFormat.m_streamInfo.GetDuration(m_sinkNeedIecPack) / 1000;
+    status.delay +=
+        static_cast<double>(m_bufferedSamples) * m_sinkFormat.m_streamInfo.GetDuration() / 1000;
 
   status.delay += static_cast<double>(m_sinkLatency);
+
+  if (!m_pcmOutput && m_sinkNeedIecPack &&
+      m_sinkFormat.m_streamInfo.m_type == CAEStreamInfo::STREAM_TYPE_TRUEHD)
+  {
+    // take into account MAT packer latency (half duration of MAT frame)
+    status.delay += m_sinkFormat.m_streamInfo.GetDuration() / 1000 / 2;
+  }
 
   for (auto &str : m_streamStats)
   {
@@ -217,8 +233,7 @@ float CEngineStats::GetCacheTotal()
 
 float CEngineStats::GetMaxDelay() const
 {
-  return static_cast<float>(MAX_CACHE_LEVEL) + static_cast<float>(MAX_WATER_LEVEL) +
-         m_sinkCacheTotal;
+  return MAX_CACHE_LEVEL + MAX_WATER_LEVEL + m_sinkCacheTotal;
 }
 
 float CEngineStats::GetWaterLevel()
@@ -227,9 +242,7 @@ float CEngineStats::GetWaterLevel()
   if (m_pcmOutput)
     return static_cast<float>(m_bufferedSamples) / m_sinkSampleRate;
   else
-    return static_cast<float>(m_bufferedSamples *
-                              m_sinkFormat.m_streamInfo.GetDuration(m_sinkNeedIecPack)) /
-           1000;
+    return static_cast<float>(m_bufferedSamples * m_sinkFormat.m_streamInfo.GetDuration()) / 1000;
 }
 
 void CEngineStats::SetSuspended(bool state)
@@ -1563,8 +1576,7 @@ void CActiveAE::FlushEngine()
 
   // send message to sink
   Message *reply;
-  if (m_sink.m_controlPort.SendOutMessageSync(CSinkControlProtocol::FLUSH,
-                                           &reply, 2000))
+  if (m_sink.m_controlPort.SendOutMessageSync(CSinkControlProtocol::FLUSH, &reply, 2s))
   {
     bool success = reply->signal == CSinkControlProtocol::ACC;
     if (!success)
@@ -1794,10 +1806,8 @@ bool CActiveAE::InitSink()
                                       &m_settings.silenceTimeoutMinutes, sizeof(int));
 
   Message *reply;
-  if (m_sink.m_controlPort.SendOutMessageSync(CSinkControlProtocol::CONFIGURE,
-                                                 &reply,
-                                                 5000,
-                                                 &config, sizeof(config)))
+  if (m_sink.m_controlPort.SendOutMessageSync(CSinkControlProtocol::CONFIGURE, &reply, 5s, &config,
+                                              sizeof(config)))
   {
     bool success = reply->signal == CSinkControlProtocol::ACC;
     if (!success)
@@ -1840,9 +1850,7 @@ void CActiveAE::DrainSink()
 {
   // send message to sink
   Message *reply;
-  if (m_sink.m_dataPort.SendOutMessageSync(CSinkDataProtocol::DRAIN,
-                                                 &reply,
-                                                 2000))
+  if (m_sink.m_dataPort.SendOutMessageSync(CSinkDataProtocol::DRAIN, &reply, 2s))
   {
     bool success = reply->signal == CSinkDataProtocol::ACC;
     if (!success)
@@ -1866,9 +1874,7 @@ void CActiveAE::UnconfigureSink()
 {
   // send message to sink
   Message *reply;
-  if (m_sink.m_controlPort.SendOutMessageSync(CSinkControlProtocol::UNCONFIGURE,
-                                                 &reply,
-                                                 2000))
+  if (m_sink.m_controlPort.SendOutMessageSync(CSinkControlProtocol::UNCONFIGURE, &reply, 2s))
   {
     bool success = reply->signal == CSinkControlProtocol::ACC;
     if (!success)
@@ -1918,7 +1924,7 @@ bool CActiveAE::RunStages()
       float buftime = (float)(*it)->m_inputBuffers->m_format.m_frames / (*it)->m_inputBuffers->m_format.m_sampleRate;
       if ((*it)->m_inputBuffers->m_format.m_dataFormat == AE_FMT_RAW)
         buftime = (*it)->m_inputBuffers->m_format.m_streamInfo.GetDuration() / 1000;
-      while ((time < static_cast<float>(MAX_CACHE_LEVEL) || (*it)->m_streamIsBuffering) &&
+      while ((time < MAX_CACHE_LEVEL || (*it)->m_streamIsBuffering) &&
              !(*it)->m_inputBuffers->m_freeSamples.empty())
       {
         buffer = (*it)->m_inputBuffers->GetFreeBuffer();
@@ -1958,7 +1964,12 @@ bool CActiveAE::RunStages()
     }
   }
 
-  if (m_stats.GetWaterLevel() < static_cast<float>(MAX_WATER_LEVEL) &&
+  // TrueHD is very jumpy, meaning the frames don't come in equidistantly. They are only smoothed
+  // at the end when the IEC packing happens. Therefore adjust earlier.
+  const bool ignoreWL =
+      (m_mode == MODE_RAW && m_sinkFormat.m_streamInfo.m_type == CAEStreamInfo::STREAM_TYPE_TRUEHD);
+
+  if ((m_stats.GetWaterLevel() < (MAX_WATER_LEVEL + 0.0001f) || ignoreWL) &&
       (m_mode != MODE_TRANSCODE || (m_encoderBuffers && !m_encoderBuffers->m_freeSamples.empty())))
   {
     // calculate sync error
@@ -2666,9 +2677,7 @@ void CActiveAE::Start()
 {
   Create();
   Message *reply;
-  if (m_controlPort.SendOutMessageSync(CActiveAEControlProtocol::INIT,
-                                                 &reply,
-                                                 10000))
+  if (m_controlPort.SendOutMessageSync(CActiveAEControlProtocol::INIT, &reply, 10s))
   {
     bool success = reply->signal == CActiveAEControlProtocol::ACC;
     reply->Release();
@@ -2859,9 +2868,7 @@ bool CActiveAE::Suspend()
 bool CActiveAE::Resume()
 {
   Message *reply;
-  if (m_controlPort.SendOutMessageSync(CActiveAEControlProtocol::INIT,
-                                                 &reply,
-                                                 5000))
+  if (m_controlPort.SendOutMessageSync(CActiveAEControlProtocol::INIT, &reply, 5s))
   {
     bool success = reply->signal == CActiveAEControlProtocol::ACC;
     reply->Release();
@@ -2935,9 +2942,7 @@ bool CActiveAE::GetCurrentSinkFormat(AEAudioFormat &SinkFormat)
 void CActiveAE::OnLostDisplay()
 {
   Message *reply;
-  if (m_controlPort.SendOutMessageSync(CActiveAEControlProtocol::DISPLAYLOST,
-                                                 &reply,
-                                                 5000))
+  if (m_controlPort.SendOutMessageSync(CActiveAEControlProtocol::DISPLAYLOST, &reply, 5s))
   {
     bool success = reply->signal == CActiveAEControlProtocol::ACC;
     reply->Release();
@@ -3255,7 +3260,8 @@ bool CActiveAE::ResampleSound(CActiveAESound *sound)
     }
   }
 
-  IAEResample *resampler = CAEResampleFactory::Create(AERESAMPLEFACTORY_QUICK_RESAMPLE);
+  std::unique_ptr<IAEResample> resampler =
+      CAEResampleFactory::Create(AERESAMPLEFACTORY_QUICK_RESAMPLE);
 
   resampler->Init(dst_config, orig_config,
                   false,
@@ -3271,10 +3277,8 @@ bool CActiveAE::ResampleSound(CActiveAESound *sound)
 
   dst_buffer = sound->InitSound(false, dst_config, dst_samples);
   if (!dst_buffer)
-  {
-    delete resampler;
     return false;
-  }
+
   int samples = resampler->Resample(dst_buffer, dst_samples,
                                     sound->GetSound(true)->data,
                                     sound->GetSound(true)->nb_samples,
@@ -3282,7 +3286,6 @@ bool CActiveAE::ResampleSound(CActiveAESound *sound)
 
   sound->GetSound(false)->nb_samples = samples;
 
-  delete resampler;
   sound->SetConverted(true);
   return true;
 }
@@ -3322,9 +3325,8 @@ IAE::StreamPtr CActiveAE::MakeStream(AEAudioFormat& audioFormat,
   msg.clock = clock;
 
   Message *reply;
-  if (m_dataPort.SendOutMessageSync(CActiveAEDataProtocol::NEWSTREAM,
-                                    &reply,10000,
-                                    &msg, sizeof(MsgStreamNew)))
+  if (m_dataPort.SendOutMessageSync(CActiveAEDataProtocol::NEWSTREAM, &reply, 10s, &msg,
+                                    sizeof(MsgStreamNew)))
   {
     bool success = reply->signal == CActiveAEControlProtocol::ACC;
     if (success)
@@ -3348,9 +3350,8 @@ bool CActiveAE::FreeStream(IAEStream *stream, bool finish)
   msg.finish = finish;
 
   Message *reply;
-  if (m_dataPort.SendOutMessageSync(CActiveAEDataProtocol::FREESTREAM,
-                                    &reply,1000,
-                                    &msg, sizeof(MsgStreamFree)))
+  if (m_dataPort.SendOutMessageSync(CActiveAEDataProtocol::FREESTREAM, &reply, 1s, &msg,
+                                    sizeof(MsgStreamFree)))
   {
     bool success = reply->signal == CActiveAEControlProtocol::ACC;
     reply->Release();
@@ -3366,9 +3367,8 @@ bool CActiveAE::FreeStream(IAEStream *stream, bool finish)
 void CActiveAE::FlushStream(CActiveAEStream *stream)
 {
   Message *reply;
-  if (m_controlPort.SendOutMessageSync(CActiveAEControlProtocol::FLUSHSTREAM,
-                                       &reply,1000,
-                                       &stream, sizeof(CActiveAEStream*)))
+  if (m_controlPort.SendOutMessageSync(CActiveAEControlProtocol::FLUSHSTREAM, &reply, 1s, &stream,
+                                       sizeof(CActiveAEStream*)))
   {
     bool success = reply->signal == CActiveAEControlProtocol::ACC;
     reply->Release();

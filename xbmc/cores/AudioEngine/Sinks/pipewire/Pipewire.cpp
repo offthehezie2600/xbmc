@@ -18,12 +18,8 @@
 
 using namespace std::chrono_literals;
 
-namespace AE
-{
-namespace SINK
-{
-namespace PIPEWIRE
-{
+using namespace KODI;
+using namespace PIPEWIRE;
 
 CPipewire::CPipewire()
 {
@@ -52,7 +48,7 @@ bool CPipewire::Start()
 
   m_context = std::make_unique<CPipewireContext>(*m_loop);
 
-  m_loop->Lock();
+  PIPEWIRE::CLoopLockGuard lock(*m_loop);
 
   if (!m_loop->Start())
   {
@@ -60,27 +56,43 @@ bool CPipewire::Start()
     return false;
   }
 
-  m_core = std::make_unique<CPipewireCore>(*m_context);
+  try
+  {
+    m_core = std::make_unique<CPipewireCore>(*m_context);
+  }
+  catch (std::exception& e)
+  {
+    CLog::Log(LOGERROR, "Pipewire: failed to connect to server");
+    return false;
+  }
+
+  CLog::Log(LOGINFO, "Pipewire: connected to server");
 
   m_registry = std::make_unique<CPipewireRegistry>(*m_core);
-  m_registry->AddListener();
 
   m_core->Sync();
 
   int ret = m_loop->Wait(5s);
-
-  m_loop->Unlock();
-
   if (ret == -ETIMEDOUT)
   {
-    CLog::Log(LOGDEBUG, "CAESinkPipewire::{} - timed out out waiting for synchronization",
-              __FUNCTION__);
+    CLog::Log(LOGDEBUG, "Pipewire: timed out out waiting for synchronization");
     return false;
   }
 
   return true;
 }
 
-} // namespace PIPEWIRE
-} // namespace SINK
-} // namespace AE
+std::unique_ptr<CPipewire> CPipewire::Create()
+{
+  struct PipewireMaker : public CPipewire
+  {
+    using CPipewire::CPipewire;
+  };
+
+  auto pipewire = std::make_unique<PipewireMaker>();
+
+  if (!pipewire->Start())
+    return {};
+
+  return pipewire;
+}

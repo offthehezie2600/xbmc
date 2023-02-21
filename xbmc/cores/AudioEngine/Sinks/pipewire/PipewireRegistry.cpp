@@ -18,12 +18,8 @@
 #include <pipewire/node.h>
 #include <pipewire/type.h>
 
-namespace AE
-{
-namespace SINK
-{
-namespace PIPEWIRE
-{
+using namespace KODI;
+using namespace PIPEWIRE;
 
 CPipewireRegistry::CPipewireRegistry(CPipewireCore& core)
   : m_core(core), m_registryEvents(CreateRegistryEvents())
@@ -34,10 +30,7 @@ CPipewireRegistry::CPipewireRegistry(CPipewireCore& core)
     CLog::Log(LOGERROR, "CPipewireRegistry: failed to create registry: {}", strerror(errno));
     throw std::runtime_error("CPipewireRegistry: failed to create registry");
   }
-}
 
-void CPipewireRegistry::AddListener()
-{
   pw_registry_add_listener(m_registry.get(), &m_registryListener, &m_registryEvents, this);
 }
 
@@ -105,7 +98,3 @@ pw_registry_events CPipewireRegistry::CreateRegistryEvents()
 
   return registryEvents;
 }
-
-} // namespace PIPEWIRE
-} // namespace SINK
-} // namespace AE

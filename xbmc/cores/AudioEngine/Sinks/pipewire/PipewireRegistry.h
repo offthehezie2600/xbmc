@@ -17,9 +17,7 @@
 #include <pipewire/core.h>
 #include <pipewire/properties.h>
 
-namespace AE
-{
-namespace SINK
+namespace KODI
 {
 namespace PIPEWIRE
 {
@@ -36,8 +34,6 @@ public:
   pw_registry* Get() const { return m_registry.get(); }
 
   CPipewireCore& GetCore() const { return m_core; }
-
-  void AddListener();
 
   struct PipewirePropertiesDeleter
   {
@@ -85,5 +81,4 @@ private:
 };
 
 } // namespace PIPEWIRE
-} // namespace SINK
-} // namespace AE
+} // namespace KODI

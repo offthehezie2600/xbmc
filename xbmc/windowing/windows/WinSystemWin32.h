@@ -68,6 +68,7 @@ struct MONITOR_DETAILS
   std::wstring MonitorNameW;
   std::wstring CardNameW;
   std::wstring DeviceNameW;
+  std::wstring DeviceStringW; // GDI device, for migration of the monitor setting from Kodi < 21
 };
 
 class CIRServerSuite;
@@ -94,11 +95,11 @@ public:
   bool Show(bool raise = true) override;
   std::string GetClipboardText() override;
   bool UseLimitedColor() override;
+  bool HasSystemSdrPeakLuminance() override;
 
   // videosync
   std::unique_ptr<CVideoSync> GetVideoSync(void *clock) override;
 
-  bool WindowedMode() const { return m_state != WINDOW_STATE_FULLSCREEN; }
   bool SetFullScreen(bool fullScreen, RESOLUTION_INFO& res, bool blankOtherDisplays) override;
 
   std::vector<std::string> GetConnectedOutputs() override;
@@ -112,7 +113,8 @@ public:
   virtual bool DPIChanged(WORD dpi, RECT windowRect) const;
   bool IsMinimized() const { return m_bMinimized; }
   void SetMinimized(bool minimized);
-  int GetGuiSdrPeakLuminance() const;
+  float GetGuiSdrPeakLuminance() const;
+  void CacheSystemSdrPeakLuminance();
 
   void SetSizeMoveMode(bool mode) { m_bSizeMoveEnabled = mode; }
   bool IsInSizeMoveMode() const { return m_bSizeMoveEnabled; }
@@ -190,6 +192,9 @@ protected:
 
   static const char* SETTING_WINDOW_TOP;
   static const char* SETTING_WINDOW_LEFT;
+
+  bool m_validSystemSdrPeakLuminance{false};
+  float m_systemSdrPeakLuminance{.0f};
 };
 
 extern HWND g_hWnd;

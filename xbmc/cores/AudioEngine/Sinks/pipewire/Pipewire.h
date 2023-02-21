@@ -10,9 +10,7 @@
 
 #include <memory>
 
-namespace AE
-{
-namespace SINK
+namespace KODI
 {
 namespace PIPEWIRE
 {
@@ -25,7 +23,8 @@ class CPipewireRegistry;
 class CPipewire
 {
 public:
-  CPipewire();
+  static std::unique_ptr<CPipewire> Create();
+
   ~CPipewire();
 
   bool Start();
@@ -36,6 +35,8 @@ public:
   CPipewireRegistry& GetRegistry() { return *m_registry; }
 
 private:
+  CPipewire();
+
   std::unique_ptr<CPipewireThreadLoop> m_loop;
   std::unique_ptr<CPipewireContext> m_context;
   std::unique_ptr<CPipewireCore> m_core;
@@ -43,5 +44,4 @@ private:
 };
 
 } // namespace PIPEWIRE
-} // namespace SINK
-} // namespace AE
+} // namespace KODI

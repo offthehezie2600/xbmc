@@ -14,11 +14,10 @@
 #include <set>
 
 #include <pipewire/node.h>
+#include <spa/param/audio/iec958.h>
 #include <spa/param/audio/raw.h>
 
-namespace AE
-{
-namespace SINK
+namespace KODI
 {
 namespace PIPEWIRE
 {
@@ -40,6 +39,7 @@ public:
   std::set<spa_audio_format>& GetFormats() { return m_formats; }
   std::set<spa_audio_channel>& GetChannels() { return m_channels; }
   std::set<uint32_t>& GetRates() { return m_rates; }
+  std::set<spa_audio_iec958_codec>& GetIEC958Codecs() { return m_iec958Codecs; }
 
 private:
   void Parse(uint32_t type, void* body, uint32_t size);
@@ -68,8 +68,8 @@ private:
   std::set<spa_audio_format> m_formats;
   std::set<spa_audio_channel> m_channels;
   std::set<uint32_t> m_rates;
+  std::set<spa_audio_iec958_codec> m_iec958Codecs;
 };
 
 } // namespace PIPEWIRE
-} // namespace SINK
-} // namespace AE
+} // namespace KODI

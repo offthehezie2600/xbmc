@@ -794,9 +794,8 @@ long CDecoder::Release()
 
     std::unique_lock<CCriticalSection> lock1(CServiceBroker::GetWinSystem()->GetGfxContext());
     Message *reply;
-    if (m_vaapiOutput.m_controlPort.SendOutMessageSync(COutputControlProtocol::PRECLEANUP,
-                                                   &reply,
-                                                   2000))
+    if (m_vaapiOutput.m_controlPort.SendOutMessageSync(COutputControlProtocol::PRECLEANUP, &reply,
+                                                       2s))
     {
       bool success = reply->signal == COutputControlProtocol::ACC ? true : false;
       reply->Release();
@@ -1093,9 +1092,7 @@ void CDecoder::Reset()
     return;
 
   Message *reply;
-  if (m_vaapiOutput.m_controlPort.SendOutMessageSync(COutputControlProtocol::FLUSH,
-                                                 &reply,
-                                                 2000))
+  if (m_vaapiOutput.m_controlPort.SendOutMessageSync(COutputControlProtocol::FLUSH, &reply, 2s))
   {
     bool success = reply->signal == COutputControlProtocol::ACC ? true : false;
     reply->Release();
@@ -1197,11 +1194,8 @@ bool CDecoder::ConfigVAAPI()
   m_bufferStats.Reset();
   m_vaapiOutput.Start();
   Message *reply;
-  if (m_vaapiOutput.m_controlPort.SendOutMessageSync(COutputControlProtocol::INIT,
-                                                     &reply,
-                                                     2000,
-                                                     &m_vaapiConfig,
-                                                     sizeof(m_vaapiConfig)))
+  if (m_vaapiOutput.m_controlPort.SendOutMessageSync(COutputControlProtocol::INIT, &reply, 2s,
+                                                     &m_vaapiConfig, sizeof(m_vaapiConfig)))
   {
     bool success = reply->signal == COutputControlProtocol::ACC ? true : false;
     if (!success)
@@ -1657,7 +1651,7 @@ void COutput::StateMachine(int signal, Protocol *port, Message *msg)
           ReleaseBufferPool(true);
           msg->Reply(COutputControlProtocol::ACC);
           m_state = O_TOP_UNCONFIGURED;
-          m_extTimeout = 10000;
+          m_extTimeout = 10s;
           return;
         default:
           break;
@@ -1673,7 +1667,7 @@ void COutput::StateMachine(int signal, Protocol *port, Message *msg)
           if (payload)
           {
             m_bufferPool->decodedPics.push_back(*(payload->GetPlayload()));
-            m_extTimeout = 0;
+            m_extTimeout = 0ms;
           }
           return;
         case COutputDataProtocol::RETURNPIC:
@@ -1681,13 +1675,13 @@ void COutput::StateMachine(int signal, Protocol *port, Message *msg)
           pic = *((CVaapiRenderPicture**)msg->data);
           QueueReturnPicture(pic);
           m_controlPort.SendInMessage(COutputControlProtocol::STATS);
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
         case COutputDataProtocol::RETURNPROCPIC:
           int id;
           id = *((int*)msg->data);
           ProcessReturnProcPicture(id);
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
         default:
           break;
@@ -1702,11 +1696,11 @@ void COutput::StateMachine(int signal, Protocol *port, Message *msg)
         {
         case COutputControlProtocol::TIMEOUT:
           ProcessSyncPicture();
-          m_extTimeout = 100;
+          m_extTimeout = 100ms;
           if (HasWork())
           {
             m_state = O_TOP_CONFIGURED_WORK;
-            m_extTimeout = 0;
+            m_extTimeout = 0ms;
           }
           return;
         default:
@@ -1727,19 +1721,19 @@ void COutput::StateMachine(int signal, Protocol *port, Message *msg)
             m_bufferPool->decodedPics.pop_front();
             InitCycle();
             m_state = O_TOP_CONFIGURED_STEP1;
-            m_extTimeout = 0;
+            m_extTimeout = 0ms;
             return;
           }
           else if (m_bufferPool->HasFree() &&
                    !m_bufferPool->processedPics.empty())
           {
             m_state = O_TOP_CONFIGURED_OUTPUT;
-            m_extTimeout = 0;
+            m_extTimeout = 0ms;
             return;
           }
           else
             m_state = O_TOP_CONFIGURED_IDLE;
-          m_extTimeout = 100;
+          m_extTimeout = 100ms;
           return;
         default:
           break;
@@ -1772,7 +1766,7 @@ void COutput::StateMachine(int signal, Protocol *port, Message *msg)
           }
           m_config.stats->DecDecoded();
           m_controlPort.SendInMessage(COutputControlProtocol::STATS);
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
         }
         default:
@@ -1793,11 +1787,11 @@ void COutput::StateMachine(int signal, Protocol *port, Message *msg)
           {
             m_bufferPool->processedPics.push_back(outPic);
             m_config.stats->IncProcessed();
-            m_extTimeout = 0;
+            m_extTimeout = 0ms;
             return;
           }
           m_state = O_TOP_CONFIGURED_IDLE;
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
         }
         default:
@@ -1827,7 +1821,7 @@ void COutput::StateMachine(int signal, Protocol *port, Message *msg)
             m_config.stats->DecProcessed();
           }
           m_state = O_TOP_CONFIGURED_IDLE;
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
         default:
           break;
@@ -1849,7 +1843,7 @@ void COutput::Process()
   bool gotMsg;
 
   m_state = O_TOP_UNCONFIGURED;
-  m_extTimeout = 1000;
+  m_extTimeout = 1s;
   m_bStateMachineSelfTrigger = false;
 
   while (!m_bStop)
@@ -1892,7 +1886,7 @@ void COutput::Process()
     }
 
     // wait for message
-    else if (m_outMsgEvent.Wait(std::chrono::milliseconds(m_extTimeout)))
+    else if (m_outMsgEvent.Wait(m_extTimeout))
     {
       continue;
     }
