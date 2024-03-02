@@ -123,35 +123,57 @@ bool CRPRenderManager::Configure(AVPixelFormat format,
   return true;
 }
 
-std::vector<VideoStreamBuffer> CRPRenderManager::GetVideoBuffers(unsigned int width,
-                                                                 unsigned int height)
+bool CRPRenderManager::GetVideoBuffer(unsigned int width,
+                                      unsigned int height,
+                                      VideoStreamBuffer& buffer)
 {
-  std::vector<VideoStreamBuffer> buffers;
+  // Clear any previous pending buffers
+  for (IRenderBuffer* buffer : m_pendingBuffers)
+    buffer->Release();
+  m_pendingBuffers.clear();
 
   if (m_bFlush || m_state != RENDER_STATE::CONFIGURED)
-    return buffers;
+    return false;
 
-  // Get buffers from visible renderers
-  for (IRenderBufferPool* bufferPool : m_processInfo.GetBufferManager().GetBufferPools())
+  // We should do our best to get a valid render buffer. If we return false,
+  // the game add-on will likely allocate its own memory.
+  IRenderBuffer* renderBuffer = nullptr;
+
+  auto bufferPools = m_processInfo.GetBufferManager().GetBufferPools();
+
+  std::sort(bufferPools.begin(), bufferPools.end(),
+            [](const IRenderBufferPool* lhs, const IRenderBufferPool* rhs)
+            {
+              // Prefer buffer pools with a visible renderer
+              if (lhs->HasVisibleRenderer() && !rhs->HasVisibleRenderer())
+                return true;
+              if (!lhs->HasVisibleRenderer() && rhs->HasVisibleRenderer())
+                return false;
+
+              //! @todo De-prioritize buffer pools with write-only or unaligned memory
+
+              return false;
+            });
+
+  for (IRenderBufferPool* bufferPool : bufferPools)
   {
-    if (!bufferPool->HasVisibleRenderer())
-      continue;
-
-    IRenderBuffer* renderBuffer = bufferPool->GetBuffer(width, height);
+    renderBuffer = bufferPool->GetBuffer(width, height);
     if (renderBuffer != nullptr)
-      m_pendingBuffers.emplace_back(renderBuffer);
+      break;
     else
       CLog::Log(LOGDEBUG, "RetroPlayer[RENDER]: Unable to get video buffer for frame");
   }
 
-  for (IRenderBuffer* renderBuffer : m_pendingBuffers)
-  {
-    buffers.emplace_back(VideoStreamBuffer{
-        renderBuffer->GetFormat(), renderBuffer->GetMemory(), renderBuffer->GetFrameSize(),
-        renderBuffer->GetMemoryAccess(), renderBuffer->GetMemoryAlignment()});
-  }
+  if (renderBuffer == nullptr)
+    return false;
 
-  return buffers;
+  buffer = VideoStreamBuffer{renderBuffer->GetFormat(), renderBuffer->GetMemory(),
+                             renderBuffer->GetFrameSize(), renderBuffer->GetMemoryAccess(),
+                             renderBuffer->GetMemoryAlignment()};
+
+  m_pendingBuffers.emplace_back(renderBuffer);
+
+  return true;
 }
 
 void CRPRenderManager::AddFrame(const uint8_t* data,
@@ -562,9 +584,9 @@ bool CRPRenderManager::HasRenderBuffer(IRenderBufferPool* bufferPool)
 
   std::unique_lock<CCriticalSection> lock(m_bufferMutex);
 
-  auto it = std::find_if(
-      m_renderBuffers.begin(), m_renderBuffers.end(),
-      [bufferPool](IRenderBuffer* renderBuffer) { return renderBuffer->GetPool() == bufferPool; });
+  auto it = std::find_if(m_renderBuffers.begin(), m_renderBuffers.end(),
+                         [bufferPool](IRenderBuffer* renderBuffer)
+                         { return renderBuffer->GetPool() == bufferPool; });
 
   if (it != m_renderBuffers.end())
     bHasRenderBuffer = true;
@@ -581,9 +603,8 @@ IRenderBuffer* CRPRenderManager::GetRenderBuffer(IRenderBufferPool* bufferPool)
 
   std::unique_lock<CCriticalSection> lock(m_bufferMutex);
 
-  auto getRenderBuffer = [bufferPool](IRenderBuffer* renderBuffer) {
-    return renderBuffer->GetPool() == bufferPool;
-  };
+  auto getRenderBuffer = [bufferPool](IRenderBuffer* renderBuffer)
+  { return renderBuffer->GetPool() == bufferPool; };
 
   auto it = std::find_if(m_renderBuffers.begin(), m_renderBuffers.end(), getRenderBuffer);
 
@@ -617,9 +638,9 @@ IRenderBuffer* CRPRenderManager::GetRenderBufferForSavestate(const std::string& 
     // Get a render buffer belonging to the specified pool
     const std::vector<IRenderBuffer*>& renderBuffers = it->second;
 
-    auto it2 = std::find_if(
-        renderBuffers.begin(), renderBuffers.end(),
-        [bufferPool](IRenderBuffer* buffer) { return buffer->GetPool() == bufferPool; });
+    auto it2 = std::find_if(renderBuffers.begin(), renderBuffers.end(),
+                            [bufferPool](IRenderBuffer* buffer)
+                            { return buffer->GetPool() == bufferPool; });
 
     if (it2 != renderBuffers.end())
     {
@@ -940,9 +961,8 @@ void CRPRenderManager::GetVideoFrame(IRenderBuffer*& readableBuffer,
 
   // Get a readable render buffer
   auto it = std::find_if(m_renderBuffers.begin(), m_renderBuffers.end(),
-                         [](const IRenderBuffer* renderBuffer) {
-                           return renderBuffer->GetMemoryAccess() != DataAccess::WRITE_ONLY;
-                         });
+                         [](const IRenderBuffer* renderBuffer)
+                         { return renderBuffer->GetMemoryAccess() != DataAccess::WRITE_ONLY; });
 
   // Aquire buffer if one was found
   if (it != m_renderBuffers.end())
@@ -986,8 +1006,8 @@ void CRPRenderManager::LoadVideoFrameAsync(const std::string& savestatePath)
                            m_savestateThreads.end());
 
   // Load the video data from the savestate asynchronously
-  std::future<void> task = std::async(
-      std::launch::async, [this, savestatePath]() { LoadVideoFrameSync(savestatePath); });
+  std::future<void> task = std::async(std::launch::async, [this, savestatePath]()
+                                      { LoadVideoFrameSync(savestatePath); });
 
   m_savestateThreads.emplace_back(std::move(task));
 }

@@ -95,7 +95,8 @@ bool ValidateSignature(const std::string& data, const char* signature)
     if (data.compare(0, signatureLen, signature) == 0)
     {
       // Check if last char is valid
-      if (std::strchr(signatureLastChars, data[signatureLen]) != nullptr)
+      if (std::memchr(signatureLastChars, data[signatureLen], sizeof(signatureLastChars)) !=
+          nullptr)
         return true;
     }
   }
@@ -825,7 +826,7 @@ void CWebVTTHandler::CalculateTextPosition(std::string& subtitleText)
 
 std::string CWebVTTHandler::GetCueSettingValue(const std::string& propName,
                                                std::string& text,
-                                               std::string defaultValue)
+                                               const std::string& defaultValue)
 {
   if (m_cuePropsMapRegex[propName].RegFind(text) >= 0)
     return m_cuePropsMapRegex[propName].GetMatch(1);

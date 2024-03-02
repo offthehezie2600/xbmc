@@ -30,6 +30,7 @@
 #ifdef TARGET_WINDOWS_DESKTOP
 #include <cassert>
 #endif
+#include <array>
 #include <locale.h>
 
 #include <shellapi.h>
@@ -839,7 +840,7 @@ extern "C" {
 
       case 'k':  /* The hour (24-hour clock representation). */
         LEGAL_ALT(0);
-        /* FALLTHROUGH */
+        [[fallthrough]];
       case 'H':
         bp = conv_num(bp, &tm->tm_hour, 0, 23);
         LEGAL_ALT(ALT_O);
@@ -847,7 +848,7 @@ extern "C" {
 
       case 'l':  /* The hour (12-hour clock representation). */
         LEGAL_ALT(0);
-        /* FALLTHROUGH */
+        [[fallthrough]];
       case 'I':
         bp = conv_num(bp, &tm->tm_hour, 1, 12);
         if (tm->tm_hour == 12)
@@ -1196,7 +1197,36 @@ HDR_STATUS CWIN32Util::ToggleWindowsHDR(DXGI_MODE_DESC& modeDesc)
   HDR_STATUS status = HDR_STATUS::HDR_TOGGLE_FAILED;
 
 #ifdef TARGET_WINDOWS_STORE
-  // Not supported - not implemented yet
+  auto hdmi = HdmiDisplayInformation::GetForCurrentView();
+
+  if (!hdmi)
+    return status;
+
+  const auto current = hdmi.GetCurrentDisplayMode();
+
+  for (const auto& mode : hdmi.GetSupportedDisplayModes())
+  {
+    if (mode.IsSmpte2084Supported() != current.IsSmpte2084Supported() &&
+        mode.ResolutionHeightInRawPixels() == current.ResolutionHeightInRawPixels() &&
+        mode.ResolutionWidthInRawPixels() == current.ResolutionWidthInRawPixels() &&
+        mode.StereoEnabled() == false &&
+        fabs(mode.RefreshRate() - current.RefreshRate()) <= 0.00001)
+    {
+      if (current.IsSmpte2084Supported()) // HDR is ON
+      {
+        CLog::LogF(LOGINFO, "Toggle Windows HDR Off (ON => OFF).");
+        if (Wait(hdmi.RequestSetCurrentDisplayModeAsync(mode, HdmiDisplayHdrOption::None)))
+          status = HDR_STATUS::HDR_OFF;
+      }
+      else // HDR is OFF
+      {
+        CLog::LogF(LOGINFO, "Toggle Windows HDR On (OFF => ON).");
+        if (Wait(hdmi.RequestSetCurrentDisplayModeAsync(mode, HdmiDisplayHdrOption::Eotf2084)))
+          status = HDR_STATUS::HDR_ON;
+      }
+      break;
+    }
+  }
 #else
   uint32_t pathCount = 0;
   uint32_t modeCount = 0;
@@ -1600,9 +1630,9 @@ VideoDriverInfo CWIN32Util::GetVideoDriverInfo(const UINT vendorId, const std::w
       info.majorVersion = std::stoi(ver.substr(ver.length() - 5, 3));
       info.minorVersion = std::stoi(ver.substr(ver.length() - 2, 2));
     }
-    else // for Intel/AMD fill major version only
+    else // for Intel/AMD fill major version only. Single-digit for WDDM < 1.3.
     {
-      info.majorVersion = std::stoi(info.version.substr(0, 2));
+      info.majorVersion = std::stoi(info.version.substr(0, info.version.find('.')));
     }
 
   } while (sta == ERROR_SUCCESS && !info.valid);
@@ -1671,4 +1701,84 @@ std::wstring CWIN32Util::GetDisplayFriendlyName(const std::wstring& gdiDeviceNam
   }
   return std::wstring();
 #endif
+}
+
+using SETTHREADDESCRIPTION = HRESULT(WINAPI*)(HANDLE hThread, PCWSTR lpThreadDescription);
+
+bool CWIN32Util::SetThreadName(const HANDLE handle, const std::string& name)
+{
+#if defined(TARGET_WINDOWS_STORE)
+  //not supported
+  return false;
+#else
+  static bool initialized = false;
+  static HINSTANCE hinstLib = NULL;
+  static SETTHREADDESCRIPTION pSetThreadDescription = nullptr;
+
+  if (!initialized)
+  {
+    initialized = true;
+
+    // MS documentation: SetThreadDescription available since Windows 10 1607
+    // function located in Kernel32.dll
+    // except for Windows 10 1607, where it is located in KernelBase.dll
+    CSysInfo::WindowsVersion winver = CSysInfo::GetWindowsVersion();
+
+    if (winver < CSysInfo::WindowsVersion::WindowsVersionWin10_1607)
+      return false;
+    else if (winver == CSysInfo::WindowsVersion::WindowsVersionWin10_1607)
+      hinstLib = LoadLibrary(L"KernelBase.dll");
+    else if (winver > CSysInfo::WindowsVersion::WindowsVersionWin10_1607)
+      hinstLib = LoadLibrary(L"Kernel32.dll");
+
+    if (hinstLib != NULL)
+    {
+      pSetThreadDescription = reinterpret_cast<SETTHREADDESCRIPTION>(
+          ::GetProcAddress(hinstLib, "SetThreadDescription"));
+    }
+
+    if (pSetThreadDescription == nullptr && hinstLib)
+      FreeLibrary(hinstLib);
+  }
+
+  if (pSetThreadDescription != nullptr &&
+      SUCCEEDED(pSetThreadDescription(handle, KODI::PLATFORM::WINDOWS::ToW(name).c_str())))
+    return true;
+  else
+    return false;
+
+#endif
+}
+
+static std::array<int, 4> ParseVideoDriverInfo(const std::string& version)
+{
+  std::array<int, 4> result{};
+
+  // the string is destroyed in the process, make a copy first.
+  std::string v{version};
+
+  char* p = std::strtok(v.data(), ".");
+  for (int idx = 0; p && idx < 4; ++idx)
+  {
+    result[idx] = std::stoi(p);
+    p = std::strtok(NULL, ".");
+  }
+
+  return result;
+}
+
+bool CWIN32Util::IsDriverVersionAtLeast(const std::string& version1, const std::string& version2)
+{
+  const std::array<int, 4> v1 = ParseVideoDriverInfo(version1);
+  const std::array<int, 4> v2 = ParseVideoDriverInfo(version2);
+
+  for (int idx = 0; idx < 4; ++idx)
+  {
+    if (v1[idx] > v2[idx])
+      return true;
+    else if (v1[idx] < v2[idx])
+      return false;
+    // equality: compare the next segment.
+  }
+  return true;
 }

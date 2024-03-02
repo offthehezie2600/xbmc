@@ -8,10 +8,6 @@
 
 #include "ActiveAE.h"
 
-#include <mutex>
-
-using namespace AE;
-using namespace ActiveAE;
 #include "ActiveAESettings.h"
 #include "ActiveAESound.h"
 #include "ActiveAEStream.h"
@@ -26,6 +22,12 @@ using namespace ActiveAE;
 #include "settings/SettingsComponent.h"
 #include "utils/log.h"
 #include "windowing/WinSystem.h"
+
+#include <memory>
+#include <mutex>
+
+using namespace AE;
+using namespace ActiveAE;
 
 using namespace std::chrono_literals;
 
@@ -288,7 +290,7 @@ CActiveAE::CActiveAE() :
   m_stats.Reset(44100, true);
   m_streamIdGen = 0;
 
-  m_settingsHandler.reset(new CActiveAESettings(*this));
+  m_settingsHandler = std::make_unique<CActiveAESettings>(*this);
 }
 
 CActiveAE::~CActiveAE()
@@ -516,6 +518,7 @@ void CActiveAE::StateMachine(int signal, Protocol *port, Message *msg)
           m_extError = false;
           m_sink.EnumerateSinkList(false, "");
           LoadSettings();
+          ValidateOutputDevices(true);
           Configure();
           if (!m_isWinSysReg)
           {
@@ -647,6 +650,7 @@ void CActiveAE::StateMachine(int signal, Protocol *port, Message *msg)
           m_controlPort.PurgeOut(CActiveAEControlProtocol::DEVICECHANGE);
           m_sink.EnumerateSinkList(true, "");
           LoadSettings();
+          ValidateOutputDevices(false);
           m_extError = false;
           Configure();
           if (!m_extError)
@@ -669,6 +673,7 @@ void CActiveAE::StateMachine(int signal, Protocol *port, Message *msg)
           {
             UnconfigureSink();
             LoadSettings();
+            ValidateOutputDevices(false);
             m_extError = false;
             Configure();
             if (!m_extError)
@@ -890,6 +895,7 @@ void CActiveAE::StateMachine(int signal, Protocol *port, Message *msg)
             m_controlPort.PurgeOut(CActiveAEControlProtocol::DEVICECOUNTCHANGE);
             m_sink.EnumerateSinkList(true, "");
             LoadSettings();
+            ValidateOutputDevices(false);
           }
           Configure();
           if (!displayReset)
@@ -1191,17 +1197,18 @@ void CActiveAE::Configure(AEAudioFormat *desiredFmt)
   m_extKeepConfig = 0ms;
 
   std::string device = (m_sinkRequestFormat.m_dataFormat == AE_FMT_RAW) ? m_settings.passthroughdevice : m_settings.device;
-  std::string driver;
-  CAESinkFactory::ParseDevice(device, driver);
-  if ((!CompareFormat(m_sinkRequestFormat, m_sinkFormat) && !CompareFormat(m_sinkRequestFormat, oldSinkRequestFormat)) ||
-      m_currDevice.compare(device) != 0 ||
-      m_settings.driver.compare(driver) != 0)
+
+  const AESinkDevice dev = CAESinkFactory::ParseDevice(device);
+
+  if ((!CompareFormat(m_sinkRequestFormat, m_sinkFormat) &&
+       !CompareFormat(m_sinkRequestFormat, oldSinkRequestFormat)) ||
+      m_currDevice.compare(dev.name) != 0 || m_settings.driver.compare(dev.driver) != 0)
   {
     FlushEngine();
     if (!InitSink())
       return;
-    m_settings.driver = driver;
-    m_currDevice = device;
+    m_settings.driver = dev.driver;
+    m_currDevice = dev.name;
     initSink = true;
     m_stats.Reset(m_sinkFormat.m_sampleRate, m_mode == MODE_PCM);
     m_sink.m_controlPort.SendOutMessage(CSinkControlProtocol::VOLUME, &m_volume, sizeof(float));
@@ -1368,12 +1375,12 @@ void CActiveAE::Configure(AEAudioFormat *desiredFmt)
         (*it)->m_processingBuffers->Flush();
         m_discardBufferPools.push_back((*it)->m_processingBuffers->GetResampleBuffers());
         m_discardBufferPools.push_back((*it)->m_processingBuffers->GetAtempoBuffers());
-        delete (*it)->m_processingBuffers;
-        (*it)->m_processingBuffers = nullptr;
+        (*it)->m_processingBuffers.reset();
       }
       if (!(*it)->m_processingBuffers)
       {
-        (*it)->m_processingBuffers = new CActiveAEStreamBuffers((*it)->m_inputBuffers->m_format, outputFormat, m_settings.resampleQuality);
+        (*it)->m_processingBuffers = std::make_unique<CActiveAEStreamBuffers>(
+            (*it)->m_inputBuffers->m_format, outputFormat, m_settings.resampleQuality);
         (*it)->m_processingBuffers->ForceResampler((*it)->m_forceResampler);
 
         (*it)->m_processingBuffers->Create(MAX_CACHE_LEVEL*1000, false, m_settings.stereoupmix, m_settings.normalizelevels);
@@ -1481,12 +1488,11 @@ CActiveAEStream* CActiveAE::CreateStream(MsgStreamNew *streamMsg)
   // create the stream
   CActiveAEStream *stream;
   stream = new CActiveAEStream(&streamMsg->format, m_streamIdGen++, this);
-  stream->m_streamPort = new CActiveAEDataProtocol("stream",
-                             &stream->m_inMsgEvent, &m_outMsgEvent);
+  stream->m_streamPort =
+      std::make_unique<CActiveAEDataProtocol>("stream", &stream->m_inMsgEvent, &m_outMsgEvent);
 
   // create buffer pool
   stream->m_inputBuffers = NULL; // create in Configure when we know the sink format
-  stream->m_processingBuffers = NULL; // create in Configure when we know the sink format
   stream->m_fadingSamples = 0;
   stream->m_started = false;
   stream->m_resampleMode = 0;
@@ -1529,10 +1535,8 @@ void CActiveAE::DiscardStream(CActiveAEStream *stream)
         m_discardBufferPools.push_back((*it)->m_processingBuffers->GetResampleBuffers());
         m_discardBufferPools.push_back((*it)->m_processingBuffers->GetAtempoBuffers());
       }
-      delete (*it)->m_processingBuffers;
       CLog::Log(LOGDEBUG, "CActiveAE::DiscardStream - audio stream deleted");
       m_stats.RemoveStream((*it)->m_id);
-      delete (*it)->m_streamPort;
       delete (*it);
       it = m_streams.erase(it);
     }
@@ -1784,12 +1788,11 @@ bool CActiveAE::NeedReconfigureSink()
   ApplySettingsToFormat(newFormat, m_settings);
 
   std::string device = (newFormat.m_dataFormat == AE_FMT_RAW) ? m_settings.passthroughdevice : m_settings.device;
-  std::string driver;
-  CAESinkFactory::ParseDevice(device, driver);
 
-  return !CompareFormat(newFormat, m_sinkFormat) ||
-      m_currDevice.compare(device) != 0 ||
-      m_settings.driver.compare(driver) != 0;
+  const AESinkDevice dev = CAESinkFactory::ParseDevice(device);
+
+  return !CompareFormat(newFormat, m_sinkFormat) || m_currDevice.compare(dev.name) != 0 ||
+         m_settings.driver.compare(dev.driver) != 0;
 }
 
 bool CActiveAE::InitSink()
@@ -2673,6 +2676,58 @@ void CActiveAE::LoadSettings()
   m_settings.silenceTimeoutMinutes = settings->GetInt(CSettings::SETTING_AUDIOOUTPUT_STREAMSILENCE);
 }
 
+void CActiveAE::ValidateOutputDevices(bool saveChanges)
+{
+  std::string device = m_sink.ValidateOuputDevice(m_settings.device, false);
+
+  if (!device.empty() && device != m_settings.device)
+  {
+    CLog::LogF(LOGWARNING, "audio output device setting has been updated from '{}' to '{}'",
+               m_settings.device, device);
+
+    const AESinkDevice oldDevice = CAESinkFactory::ParseDevice(m_settings.device);
+    const AESinkDevice newDevice = CAESinkFactory::ParseDevice(device);
+
+    m_settings.device = device;
+
+    if (saveChanges && newDevice.IsSameDeviceAs(oldDevice))
+    {
+      const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+      if (settings)
+      {
+        settings->SetString(CSettings::SETTING_AUDIOOUTPUT_AUDIODEVICE, m_settings.device);
+        settings->Save();
+        CLog::LogF(LOGDEBUG, "the change of the audio output device setting has been saved");
+      }
+    }
+  }
+
+  device = m_sink.ValidateOuputDevice(m_settings.passthroughdevice, true);
+
+  if (!device.empty() && device != m_settings.passthroughdevice)
+  {
+    CLog::LogF(LOGWARNING, "passthrough output device setting has been updated from '{}' to '{}'",
+               m_settings.passthroughdevice, device);
+
+    const AESinkDevice oldDevice = CAESinkFactory::ParseDevice(m_settings.passthroughdevice);
+    const AESinkDevice newDevice = CAESinkFactory::ParseDevice(device);
+
+    m_settings.passthroughdevice = device;
+
+    if (saveChanges && newDevice.IsSameDeviceAs(oldDevice))
+    {
+      const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+      if (settings)
+      {
+        settings->SetString(CSettings::SETTING_AUDIOOUTPUT_PASSTHROUGHDEVICE,
+                            m_settings.passthroughdevice);
+        settings->Save();
+        CLog::LogF(LOGDEBUG, "the change of the passthrough output device setting has been saved");
+      }
+    }
+  }
+}
+
 void CActiveAE::Start()
 {
   Create();
@@ -3020,7 +3075,7 @@ IAE::SoundPtr CActiveAE::MakeSound(const std::string& file)
   AVIOContext *io_ctx;
   const AVInputFormat* io_fmt = nullptr;
   const AVCodec* dec = nullptr;
-  SampleConfig config;
+  SampleConfig config{};
 
   // No custom deleter until sound is registered
   auto sound = std::make_unique<CActiveAESound>(file, this);

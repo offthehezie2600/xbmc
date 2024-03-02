@@ -69,11 +69,11 @@ bool CRendererMediaCodecSurface::Configure(const VideoPicture &picture, float fp
 CRenderInfo CRendererMediaCodecSurface::GetRenderInfo()
 {
   CRenderInfo info;
-  info.max_buffer_size = info.optimal_buffer_size = 4;
+  info.max_buffer_size = 4;
   return info;
 }
 
-bool CRendererMediaCodecSurface::RenderCapture(CRenderCapture* capture)
+bool CRendererMediaCodecSurface::RenderCapture(int index, CRenderCapture* capture)
 {
   capture->BeginRender();
   capture->EndRender();

@@ -108,7 +108,7 @@ void CDVDSubtitlesLibass::Configure()
                                     XFILE::DIR_FLAG_NO_FILE_DIRS | XFILE::DIR_FLAG_NO_FILE_INFO);
   }
   // Get temporary fonts
-  if (XFILE::CDirectory::Exists(UTILS::FONT::FONTPATH::SYSTEM, false))
+  if (XFILE::CDirectory::Exists(UTILS::FONT::FONTPATH::TEMP, false))
   {
     XFILE::CDirectory::GetDirectory(
         UTILS::FONT::FONTPATH::TEMP, items, UTILS::FONT::SUPPORTED_EXTENSIONS_MASK,
@@ -208,6 +208,9 @@ bool CDVDSubtitlesLibass::CreateTrack()
   m_track->PlayResY = static_cast<int>(VIEWPORT_HEIGHT);
   m_track->Kerning = true; // Font kerning improves the letterspacing
   m_track->WrapStyle = 1; // The line feed \n doesn't break but wraps (instead \N breaks)
+
+  if (ass_track_set_feature(m_track, ASS_FEATURE_BIDI_BRACKETS, 1) != 0)
+    CLog::LogF(LOGWARNING, "ASS track ASS_FEATURE_BIDI_BRACKETS feature cannot be set");
 
   return true;
 }

@@ -24,6 +24,7 @@
 #include "application/Application.h"
 #include "cores/RetroPlayer/process/wayland/RPProcessInfoWayland.h"
 #include "cores/VideoPlayer/Process/wayland/ProcessInfoWayland.h"
+#include "cores/VideoPlayer/VideoReferenceClock.h"
 #include "guilib/DispResource.h"
 #include "guilib/LocalizeStrings.h"
 #include "input/InputManager.h"
@@ -46,12 +47,9 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <numeric>
-
-#if defined(HAS_DBUS)
-# include "windowing/linux/OSScreenSaverFreedesktop.h"
-#endif
 
 using namespace KODI::WINDOWING;
 using namespace KODI::WINDOWING::WAYLAND;
@@ -138,7 +136,7 @@ struct MsgBufferScale
 CWinSystemWayland::CWinSystemWayland()
 : CWinSystemBase{}, m_protocol{"WinSystemWaylandInternal"}
 {
-  m_winEvents.reset(new CWinEventsWayland());
+  m_winEvents = std::make_unique<CWinEventsWayland>();
 }
 
 CWinSystemWayland::~CWinSystemWayland() noexcept
@@ -166,7 +164,7 @@ bool CWinSystemWayland::InitWindowSystem()
   VIDEOPLAYER::CProcessInfoWayland::Register();
   RETRO::CRPProcessInfoWayland::Register();
 
-  m_registry.reset(new CRegistry{*m_connection});
+  m_registry = std::make_unique<CRegistry>(*m_connection);
 
   m_registry->RequestSingleton(m_compositor, 1, 4);
   m_registry->RequestSingleton(m_shm, 1, 1);
@@ -278,10 +276,10 @@ bool CWinSystemWayland::CreateNewWindow(const std::string& name,
     }
   };
 
-  m_windowDecorator.reset(new CWindowDecorator(*this, *m_connection, m_surface));
+  m_windowDecorator = std::make_unique<CWindowDecorator>(*this, *m_connection, m_surface);
 
-  m_seatInputProcessing.reset(new CSeatInputProcessing(m_surface, *this));
-  m_seatRegistry.reset(new CRegistry{*m_connection});
+  m_seatInputProcessing = std::make_unique<CSeatInputProcessing>(m_surface, *this);
+  m_seatRegistry = std::make_unique<CRegistry>(*m_connection);
   // version 2 adds name event -> optional
   // version 4 adds wl_keyboard repeat_info -> optional
   // version 5 adds discrete axis events in wl_pointer -> unused
@@ -303,19 +301,7 @@ bool CWinSystemWayland::CreateNewWindow(const std::string& name,
   UpdateSizeVariables({res.iWidth, res.iHeight}, m_scale, m_shellSurfaceState, false);
 
   // Use AppName as the desktop file name. This is required to lookup the app icon of the same name.
-  m_shellSurface.reset(CShellSurfaceXdgShell::TryCreate(*this, *m_connection, m_surface, name,
-                                                        std::string(CCompileInfo::GetAppName())));
-  if (!m_shellSurface)
-  {
-    m_shellSurface.reset(CShellSurfaceXdgShellUnstableV6::TryCreate(
-        *this, *m_connection, m_surface, name, std::string(CCompileInfo::GetAppName())));
-  }
-  if (!m_shellSurface)
-  {
-    CLog::LogF(LOGWARNING, "Compositor does not support xdg_shell protocol (stable or unstable v6) - falling back to wl_shell, not all features might work");
-    m_shellSurface.reset(new CShellSurfaceWlShell(*this, *m_connection, m_surface, name,
-                                                  std::string(CCompileInfo::GetAppName())));
-  }
+  m_shellSurface.reset(CreateShellSurface(name));
 
   if (fullScreen)
   {
@@ -377,6 +363,26 @@ bool CWinSystemWayland::CreateNewWindow(const std::string& name,
   CWinEventsWayland::SetDisplay(&m_connection->GetDisplay());
 
   return true;
+}
+
+IShellSurface* CWinSystemWayland::CreateShellSurface(const std::string& name)
+{
+  IShellSurface* shell = CShellSurfaceXdgShell::TryCreate(*this, *m_connection, m_surface, name,
+                                                          std::string(CCompileInfo::GetAppName()));
+  if (!shell)
+  {
+    shell = CShellSurfaceXdgShellUnstableV6::TryCreate(*this, *m_connection, m_surface, name,
+                                                       std::string(CCompileInfo::GetAppName()));
+  }
+  if (!shell)
+  {
+    CLog::LogF(LOGWARNING, "Compositor does not support xdg_shell protocol (stable or unstable v6) "
+                           "- falling back to wl_shell, not all features might work");
+    shell = new CShellSurfaceWlShell(*this, *m_connection, m_surface, name,
+                                     std::string(CCompileInfo::GetAppName()));
+  }
+
+  return shell;
 }
 
 bool CWinSystemWayland::DestroyWindow()
@@ -1463,7 +1469,7 @@ KODI::CSignalRegistration CWinSystemWayland::RegisterOnPresentationFeedback(
   return m_presentationFeedbackHandlers.Register(handler);
 }
 
-std::unique_ptr<CVideoSync> CWinSystemWayland::GetVideoSync(void* clock)
+std::unique_ptr<CVideoSync> CWinSystemWayland::GetVideoSync(CVideoReferenceClock* clock)
 {
   if (m_surface && m_presentation)
   {

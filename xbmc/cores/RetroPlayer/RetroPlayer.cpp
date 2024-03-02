@@ -9,6 +9,7 @@
 #include "RetroPlayer.h"
 
 #include "FileItem.h"
+#include "GUIInfoManager.h"
 #include "RetroPlayerAutoSave.h"
 #include "RetroPlayerInput.h"
 #include "ServiceBroker.h"
@@ -42,12 +43,14 @@
 #include "guilib/WindowIDs.h"
 #include "input/actions/Action.h"
 #include "input/actions/ActionIDs.h"
+#include "interfaces/AnnouncementManager.h"
 #include "messaging/ApplicationMessenger.h"
 #include "utils/JobManager.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 #include "windowing/WinSystem.h"
 
+#include <memory>
 #include <mutex>
 
 using namespace KODI;
@@ -98,7 +101,7 @@ bool CRetroPlayer::OpenFile(const CFileItem& file, const CPlayerOptions& options
   m_processInfo->ResetInfo();
 
   m_guiMessenger = std::make_unique<CGUIGameMessenger>(*m_processInfo);
-  m_renderManager.reset(new CRPRenderManager(*m_processInfo));
+  m_renderManager = std::make_unique<CRPRenderManager>(*m_processInfo);
 
   std::unique_lock<CCriticalSection> lock(m_mutex);
 
@@ -126,7 +129,7 @@ bool CRetroPlayer::OpenFile(const CFileItem& file, const CPlayerOptions& options
     m_gameClient = std::static_pointer_cast<CGameClient>(addon);
     if (m_gameClient->Initialize())
     {
-      m_streamManager.reset(new CRPStreamManager(*m_renderManager, *m_processInfo));
+      m_streamManager = std::make_unique<CRPStreamManager>(*m_renderManager, *m_processInfo);
 
       // Initialize input
       m_input = std::make_unique<CRetroPlayerInput>(CServiceBroker::GetPeripherals(),
@@ -194,11 +197,11 @@ bool CRetroPlayer::OpenFile(const CFileItem& file, const CPlayerOptions& options
     // Initialize gameplay
     CreatePlayback(savestatePath);
     RegisterWindowCallbacks();
-    m_playbackControl.reset(new CGUIPlaybackControl(*this));
+    m_playbackControl = std::make_unique<CGUIPlaybackControl>(*this);
     m_callback.OnPlayBackStarted(fileCopy);
     m_callback.OnAVStarted(fileCopy);
     if (!bStandalone)
-      m_autoSave.reset(new CRetroPlayerAutoSave(*this, m_gameServices.GameSettings()));
+      m_autoSave = std::make_unique<CRetroPlayerAutoSave>(*this, m_gameServices.GameSettings());
 
     // Set video framerate
     m_processInfo->SetVideoFps(static_cast<float>(m_gameClient->GetFrameRate()));
@@ -255,8 +258,11 @@ bool CRetroPlayer::CloseFile(bool reopen /* = false */)
   m_gameClient.reset();
 
   m_renderManager.reset();
+  if (m_processInfo)
+  {
+    m_processInfo->ResetInfo();
+  }
   m_processInfo.reset();
-
   CLog::Log(LOGDEBUG, "RetroPlayer[PLAYER]: Playback ended");
   m_callback.OnPlayBackEnded();
 
@@ -646,7 +652,7 @@ void CRetroPlayer::ResetPlayback()
   if (m_playback)
     m_playback->Deinitialize();
 
-  m_playback.reset(new CRealtimePlayback);
+  m_playback = std::make_unique<CRealtimePlayback>();
 }
 
 void CRetroPlayer::OpenOSD()

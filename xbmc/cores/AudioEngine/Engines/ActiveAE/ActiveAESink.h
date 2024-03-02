@@ -93,8 +93,11 @@ class CActiveAESink : private CThread
 {
 public:
   explicit CActiveAESink(CEvent *inMsgEvent);
+  ~CActiveAESink();
+
   void EnumerateSinkList(bool force, std::string driver);
   void EnumerateOutputDevices(AEDeviceList &devices, bool passthrough);
+  std::string ValidateOuputDevice(const std::string& device, bool passthrough) const;
   void Start();
   void Dispose();
   AEDeviceType GetDeviceType(const std::string &device);
@@ -151,7 +154,7 @@ protected:
   CEngineStats *m_stats;
   float m_volume;
   int m_sinkLatency;
-  CAEBitstreamPacker *m_packer;
+  std::unique_ptr<CAEBitstreamPacker> m_packer;
   bool m_needIecPack{false};
   bool m_streamNoise;
 };

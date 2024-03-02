@@ -156,6 +156,12 @@ public:
    */
   bool SetOverflow(OVER_FLOW overflow);
 
+  /*!
+   * \brief Set if the text truncate (and ellipsis "...") must be done in reverse (on LTR text by default on the left).
+   * \param isReversed Set true to reversed behaviour
+   */
+  void SetReversedTruncate(bool isReversed) { m_isReversedTruncate = isReversed; }
+
   /*! \brief Set this label invalid.  Forces an update of the control
    */
   void SetInvalid();
@@ -231,10 +237,11 @@ private:
 
   bool           m_scrolling;
   OVER_FLOW      m_overflowType;
+  bool m_isReversedTruncate{false};
   CScrollInfo    m_scrollInfo;
   CRect          m_renderRect;   ///< actual sizing of text
   CRect          m_maxRect;      ///< maximum sizing of text
-  bool           m_invalid;      ///< if true, the label needs recomputing
-  COLOR          m_color;        ///< color to render text \sa SetColor, GetColor
+  bool m_invalid = true; ///< if true, the label needs recomputing
+  COLOR m_color = COLOR_TEXT; ///< color to render text \sa SetColor, GetColor
   unsigned int   m_maxScrollLoops = ~0U;
 };

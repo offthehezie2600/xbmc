@@ -36,6 +36,7 @@
 #include "platform/win32/input/IRServerSuite.h"
 
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 
 #include <tpcshrd.h>
@@ -165,8 +166,9 @@ bool CWinSystemWin32::CreateNewWindow(const std::string& name, bool fullScreen, 
     const RECT vsRect = GetVirtualScreenRect();
 
     // we check that window is inside of virtual screen rect (sum of all monitors)
-    if (top != 0 && left != 0 && top > vsRect.top && top + m_nHeight < vsRect.bottom &&
-        left > vsRect.left && left + m_nWidth < vsRect.right)
+    // top 0 left 0 is a special position that centers the window on the screen
+    if ((top != 0 || left != 0) && top >= vsRect.top && top + m_nHeight <= vsRect.bottom &&
+        left >= vsRect.left && left + m_nWidth <= vsRect.right)
     {
       // restore previous window position
       m_nLeft = left;
@@ -174,9 +176,21 @@ bool CWinSystemWin32::CreateNewWindow(const std::string& name, bool fullScreen, 
     }
     else
     {
-      // centering window at desktop
-      m_nLeft += (screenRect.right - screenRect.left) / 2 - m_nWidth / 2;
-      m_nTop += (screenRect.bottom - screenRect.top) / 2 - m_nHeight / 2;
+      // Windowed mode: position and size in settings and most places in Kodi
+      // are for the client part of the window.
+      RECT rcWorkArea = GetScreenWorkArea(m_hMonitor);
+
+      RECT rcNcArea = GetNcAreaOffsets(m_windowStyle, false, m_windowExStyle);
+      int maxClientWidth = (rcWorkArea.right - rcNcArea.right) - (rcWorkArea.left - rcNcArea.left);
+      int maxClientHeight = (rcWorkArea.bottom - rcNcArea.bottom) - (rcWorkArea.top - rcNcArea.top);
+
+      m_nWidth = std::min(m_nWidth, maxClientWidth);
+      m_nHeight = std::min(m_nHeight, maxClientHeight);
+      CWinSystemBase::SetWindowResolution(m_nWidth, m_nHeight);
+
+      // center window on desktop
+      m_nLeft = rcWorkArea.left - rcNcArea.left + (maxClientWidth - m_nWidth) / 2;
+      m_nTop = rcWorkArea.top - rcNcArea.top + (maxClientHeight - m_nHeight) / 2;
     }
     m_ValidWindowedPosition = true;
   }
@@ -351,6 +365,11 @@ void CWinSystemWin32::FinishWindowResize(int newWidth, int newHeight)
   m_nHeight = newHeight;
 }
 
+void CWinSystemWin32::ForceFullScreen(const RESOLUTION_INFO& resInfo)
+{
+  ResizeWindow(resInfo.iScreenWidth, resInfo.iScreenHeight, 0, 0);
+}
+
 void CWinSystemWin32::AdjustWindow(bool forceResize)
 {
   CLog::LogF(LOGDEBUG, "adjusting window if required.");
@@ -375,14 +394,35 @@ void CWinSystemWin32::AdjustWindow(bool forceResize)
       const RECT vsRect = GetVirtualScreenRect();
 
       // we check that window is inside of virtual screen rect (sum of all monitors)
-      if (top != 0 && left != 0 && top > vsRect.top && top + m_nHeight < vsRect.bottom &&
-          left > vsRect.left && left + m_nWidth < vsRect.right)
+      // top 0 left 0 is a special position that centers the window on the screen
+      if ((top != 0 || left != 0) && top >= vsRect.top && top + m_nHeight <= vsRect.bottom &&
+          left >= vsRect.left && left + m_nWidth <= vsRect.right)
       {
         // restore previous window position
         m_nTop = top;
         m_nLeft = left;
-        m_ValidWindowedPosition = true;
       }
+      else
+      {
+        // Windowed mode: position and size in settings and most places in Kodi
+        // are for the client part of the window.
+        RECT rcWorkArea = GetScreenWorkArea(m_hMonitor);
+
+        RECT rcNcArea = GetNcAreaOffsets(m_windowStyle, false, m_windowExStyle);
+        int maxClientWidth =
+            (rcWorkArea.right - rcNcArea.right) - (rcWorkArea.left - rcNcArea.left);
+        int maxClientHeight =
+            (rcWorkArea.bottom - rcNcArea.bottom) - (rcWorkArea.top - rcNcArea.top);
+
+        m_nWidth = std::min(m_nWidth, maxClientWidth);
+        m_nHeight = std::min(m_nHeight, maxClientHeight);
+        CWinSystemBase::SetWindowResolution(m_nWidth, m_nHeight);
+
+        // center window on desktop
+        m_nLeft = rcWorkArea.left - rcNcArea.left + (maxClientWidth - m_nWidth) / 2;
+        m_nTop = rcWorkArea.top - rcNcArea.top + (maxClientHeight - m_nHeight) / 2;
+      }
+      m_ValidWindowedPosition = true;
     }
 
     rc.left = m_nLeft;
@@ -694,7 +734,7 @@ void CWinSystemWin32::RestoreDesktopResolution(MONITOR_DETAILS* details)
   RESOLUTION_INFO info;
   info.iWidth = details->ScreenWidth;
   info.iHeight = details->ScreenHeight;
-  if (details->RefreshRate == 59 || details->RefreshRate == 29 || details->RefreshRate == 23)
+  if ((details->RefreshRate + 1) % 24 == 0 || (details->RefreshRate + 1) % 30 == 0)
     info.fRefreshRate = static_cast<float>(details->RefreshRate + 1) / 1.001f;
   else
     info.fRefreshRate = static_cast<float>(details->RefreshRate);
@@ -776,9 +816,6 @@ RECT CWinSystemWin32::ScreenRect(HMONITOR handle)
 void CWinSystemWin32::GetConnectedDisplays(std::vector<MONITOR_DETAILS>& outputs)
 {
   using KODI::PLATFORM::WINDOWS::FromW;
-
-  const POINT ptZero = { 0, 0 };
-  HMONITOR hmPrimary = MonitorFromPoint(ptZero, MONITOR_DEFAULTTOPRIMARY);
 
   DISPLAY_DEVICEW ddAdapter = {};
   ddAdapter.cb = sizeof(ddAdapter);
@@ -966,19 +1003,22 @@ void CWinSystemWin32::UpdateResolutions()
   CWinSystemBase::UpdateResolutions();
   GetConnectedDisplays(m_displays);
 
-  // For the migration of setting videoscreen.monitor from GDI device string to EDID-based name
   const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
   std::string settingsMonitor = settings->GetString(CSettings::SETTING_VIDEOSCREEN_MONITOR);
   MONITOR_DETAILS* details = GetDisplayDetails(settingsMonitor);
   if (!details)
     return;
-  if (settingsMonitor != FromW(details->MonitorNameW))
+  // Migrate the setting to EDID-based name for connected and recognized screens.
+  // Other screens may be temporarily turned off, ignore so they're used once available again
+  if (settingsMonitor != FromW(details->MonitorNameW) &&
+      (settingsMonitor == FromW(details->DeviceStringW) ||
+       settingsMonitor == FromW(details->DeviceNameW)))
     CDisplaySettings::GetInstance().SetMonitor(FromW(details->MonitorNameW));
 
   float refreshRate;
   int w = details->ScreenWidth;
   int h = details->ScreenHeight;
-  if( (details->RefreshRate == 59) || (details->RefreshRate == 29) || (details->RefreshRate == 23) )
+  if ((details->RefreshRate + 1) % 24 == 0 || (details->RefreshRate + 1) % 30 == 0)
     refreshRate = static_cast<float>(details->RefreshRate + 1) / 1.001f;
   else
     refreshRate = static_cast<float>(details->RefreshRate);
@@ -1007,7 +1047,7 @@ void CWinSystemWin32::UpdateResolutions()
       continue;
 
     float refresh;
-    if(devmode.dmDisplayFrequency == 59 || devmode.dmDisplayFrequency == 29 || devmode.dmDisplayFrequency == 23)
+    if ((devmode.dmDisplayFrequency + 1) % 24 == 0 || (devmode.dmDisplayFrequency + 1) % 30 == 0)
       refresh = static_cast<float>(devmode.dmDisplayFrequency + 1) / 1.001f;
     else
       refresh = static_cast<float>(devmode.dmDisplayFrequency);
@@ -1195,7 +1235,7 @@ void CWinSystemWin32::SetForegroundWindowInternal(HWND hWnd)
   }
 }
 
-std::unique_ptr<CVideoSync> CWinSystemWin32::GetVideoSync(void *clock)
+std::unique_ptr<CVideoSync> CWinSystemWin32::GetVideoSync(CVideoReferenceClock* clock)
 {
   std::unique_ptr<CVideoSync> pVSync(new CVideoSyncD3D(clock));
   return pVSync;
@@ -1318,8 +1358,8 @@ float CWinSystemWin32::GetGuiSdrPeakLuminance() const
     return m_systemSdrPeakLuminance;
 
   // Max nits for 100% UI setting = 1000 nits, < 10000 nits, min 80 nits for 0%
-  int guiSdrPeak = settings->GetInt(CSettings::SETTING_VIDEOSCREEN_GUISDRPEAKLUMINANCE);
-  return 10000.0f / ((100 - guiSdrPeak) * 1.15f + 10);
+  const int guiSdrPeak = settings->GetInt(CSettings::SETTING_VIDEOSCREEN_GUISDRPEAKLUMINANCE);
+  return (80.0f * std::pow(std::exp(1.0f), 0.025257f * guiSdrPeak));
 }
 
 /*!
@@ -1349,4 +1389,29 @@ void CWinSystemWin32::CacheSystemSdrPeakLuminance()
     m_validSystemSdrPeakLuminance =
         CWIN32Util::GetSystemSdrWhiteLevel(md->DeviceNameW, &m_systemSdrPeakLuminance);
   }
+}
+
+RECT CWinSystemWin32::GetScreenWorkArea(HMONITOR handle) const
+{
+  MONITORINFO monitorInfo{};
+  monitorInfo.cbSize = sizeof(MONITORINFO);
+  if (!GetMonitorInfoW(handle, &monitorInfo))
+  {
+    CLog::LogF(LOGERROR, "GetMonitorInfoW failed with {}", GetLastError());
+    return RECT();
+  }
+  return monitorInfo.rcWork;
+}
+
+RECT CWinSystemWin32::GetNcAreaOffsets(DWORD dwStyle, BOOL bMenu, DWORD dwExStyle) const
+{
+  RECT rcNcArea{};
+  SetRectEmpty(&rcNcArea);
+
+  if (!AdjustWindowRectEx(&rcNcArea, dwStyle, false, dwExStyle))
+  {
+    CLog::LogF(LOGERROR, "AdjustWindowRectEx failed with {}", GetLastError());
+    return RECT();
+  }
+  return rcNcArea;
 }

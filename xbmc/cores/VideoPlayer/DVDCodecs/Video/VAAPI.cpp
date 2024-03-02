@@ -518,7 +518,6 @@ CDecoder::CDecoder(CProcessInfo& processInfo) :
   m_vaapiConfig.context = 0;
   m_vaapiConfig.configId = VA_INVALID_ID;
   m_vaapiConfig.processInfo = &m_processInfo;
-  m_avctx = nullptr;
   m_getBufferError = 0;
 }
 
@@ -715,7 +714,7 @@ bool CDecoder::Open(AVCodecContext* avctx, AVCodecContext* mainctx, const enum A
   else if (avctx->codec_id == AV_CODEC_ID_VP9)
     m_vaapiConfig.maxReferences = 8;
   else if (avctx->codec_id == AV_CODEC_ID_AV1)
-    m_vaapiConfig.maxReferences = 18;
+    m_vaapiConfig.maxReferences = 21;
   else
     m_vaapiConfig.maxReferences = 2;
 
@@ -753,7 +752,6 @@ bool CDecoder::Open(AVCodecContext* avctx, AVCodecContext* mainctx, const enum A
   avctx->get_buffer2 = CDecoder::FFGetBuffer;
   avctx->slice_flags = SLICE_FLAG_CODED_ORDER|SLICE_FLAG_ALLOW_FIELD;
 
-  m_avctx = mainctx;
   return true;
 }
 
@@ -774,12 +772,6 @@ void CDecoder::Close()
 
 long CDecoder::Release()
 {
-  // if ffmpeg holds any references, flush buffers
-  if (m_avctx && m_videoSurfaces.HasRefs())
-  {
-    avcodec_flush_buffers(m_avctx);
-  }
-
   if (m_presentPicture)
   {
     m_presentPicture->Release();
@@ -867,7 +859,10 @@ int CDecoder::FFGetBuffer(AVCodecContext *avctx, AVFrame *pic, int flags)
   }
   pic->buf[0] = buffer;
 
+#if LIBAVCODEC_VERSION_MAJOR < 60
   pic->reordered_opaque = avctx->reordered_opaque;
+#endif
+
   va->Acquire();
   return 0;
 }
@@ -1156,7 +1151,7 @@ bool CDecoder::ConfigVAAPI()
   unsigned int format = VA_RT_FORMAT_YUV420;
   std::int32_t pixelFormat = VA_FOURCC_NV12;
 
-  if ((m_vaapiConfig.profile == VAProfileHEVCMain10
+  if ((m_vaapiConfig.profile == VAProfileHEVCMain10 || m_vaapiConfig.profile == VAProfileVP9Profile2
 #if VA_CHECK_VERSION(1, 8, 0)
        || m_vaapiConfig.profile == VAProfileAV1Profile0
 #endif
@@ -1497,14 +1492,14 @@ void CVaapiRenderPicture::GetStrides(int(&strides)[YuvImage::MAX_PLANES])
 //-----------------------------------------------------------------------------
 // Output
 //-----------------------------------------------------------------------------
-COutput::COutput(CDecoder &decoder, CEvent *inMsgEvent) :
-  CThread("Vaapi-Output"),
-  m_controlPort("OutputControlPort", inMsgEvent, &m_outMsgEvent),
-  m_dataPort("OutputDataPort", inMsgEvent, &m_outMsgEvent),
-  m_vaapi(decoder)
+COutput::COutput(CDecoder& decoder, CEvent* inMsgEvent)
+  : CThread("Vaapi-Output"),
+    m_controlPort("OutputControlPort", inMsgEvent, &m_outMsgEvent),
+    m_dataPort("OutputDataPort", inMsgEvent, &m_outMsgEvent),
+    m_vaapi(decoder),
+    m_bufferPool(std::make_shared<CVaapiBufferPool>(decoder))
 {
   m_inMsgEvent = inMsgEvent;
-  m_bufferPool = std::make_shared<CVaapiBufferPool>(decoder);
 }
 
 void COutput::Start()
@@ -2962,10 +2957,11 @@ bool CFFmpegPostproc::Init(EINTERLACEMETHOD method)
   const AVFilter* srcFilter = avfilter_get_by_name("buffer");
   const AVFilter* outFilter = avfilter_get_by_name("buffersink");
 
-  std::string args = StringUtils::Format("{}:{}:{}:{}:{}:{}:{}", m_config.vidWidth,
-                                         m_config.vidHeight, AV_PIX_FMT_NV12, 1, 1,
-                                         (m_config.aspect.num != 0) ? m_config.aspect.num : 1,
-                                         (m_config.aspect.num != 0) ? m_config.aspect.den : 1);
+  std::string args =
+      StringUtils::Format("video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
+                          m_config.vidWidth, m_config.vidHeight, AV_PIX_FMT_NV12, 1, 1,
+                          (m_config.aspect.num != 0) ? m_config.aspect.num : 1,
+                          (m_config.aspect.num != 0) ? m_config.aspect.den : 1);
 
   if (avfilter_graph_create_filter(&m_pFilterIn, srcFilter, "src", args.c_str(), NULL, m_pFilterGraph) < 0)
   {
@@ -3003,7 +2999,7 @@ bool CFFmpegPostproc::Init(EINTERLACEMETHOD method)
   {
     std::string filter;
 
-    filter = "yadif=1:-1";
+    filter = "bwdif=1:-1";
 
     if (avfilter_graph_parse_ptr(m_pFilterGraph, filter.c_str(), &inputs, &outputs, NULL) < 0)
     {
@@ -3022,7 +3018,7 @@ bool CFFmpegPostproc::Init(EINTERLACEMETHOD method)
       return false;
     }
 
-    m_config.processInfo->SetVideoDeintMethod("yadif");
+    m_config.processInfo->SetVideoDeintMethod("bwdif");
   }
   else if (method == VS_INTERLACEMETHOD_RENDER_BOB ||
            method == VS_INTERLACEMETHOD_NONE)

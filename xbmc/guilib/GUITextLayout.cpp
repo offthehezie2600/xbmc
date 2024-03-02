@@ -684,6 +684,11 @@ float CGUITextLayout::GetTextWidth(const std::wstring &text) const
   return m_font->GetTextWidth(utf32);
 }
 
+float CGUITextLayout::GetTextWidth(const vecText& text) const
+{
+  return m_font->GetTextWidth(text);
+}
+
 std::string CGUITextLayout::GetText() const
 {
   if (m_lastUpdateW)

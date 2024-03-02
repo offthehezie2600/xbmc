@@ -8,10 +8,11 @@
 
 #include "Pipewire.h"
 
-#include "cores/AudioEngine/Sinks/pipewire/PipewireContext.h"
-#include "cores/AudioEngine/Sinks/pipewire/PipewireCore.h"
-#include "cores/AudioEngine/Sinks/pipewire/PipewireRegistry.h"
-#include "cores/AudioEngine/Sinks/pipewire/PipewireThreadLoop.h"
+#include "PipewireContext.h"
+#include "PipewireCore.h"
+#include "PipewireRegistry.h"
+#include "PipewireThreadLoop.h"
+#include "commons/ilog.h"
 #include "utils/log.h"
 
 #include <pipewire/pipewire.h>
@@ -89,10 +90,18 @@ std::unique_ptr<CPipewire> CPipewire::Create()
     using CPipewire::CPipewire;
   };
 
-  auto pipewire = std::make_unique<PipewireMaker>();
+  try
+  {
+    auto pipewire = std::make_unique<PipewireMaker>();
 
-  if (!pipewire->Start())
+    if (!pipewire->Start())
+      return {};
+
+    return pipewire;
+  }
+  catch (const std::exception& e)
+  {
+    CLog::Log(LOGWARNING, "Pipewire: Exception in 'Create': {}", e.what());
     return {};
-
-  return pipewire;
+  }
 }
